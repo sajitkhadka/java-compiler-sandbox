@@ -5,7 +5,7 @@
 Java Compiler Sandbox API is a Spring Boot project that provides an online Java compiler through a RESTful API. It
 allows users to compile and execute Java code snippets securely and efficiently.
 
-🌐 **Live Demo**: [java-sandbox.sajit.me](https://java-sandbox.sajit.me)
+🌐 **Live Demo**: [java-sandbox.sajitkhadka.com](https://java-sandbox.sajitkhadka.com)
 
 ## 🚀 Features
 
