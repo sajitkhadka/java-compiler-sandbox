@@ -4,13 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
-    <title>API Documentation - Java Code Compiler</title>
+    <title>Free Java Compiler API - Documentation, Examples &amp; Rate Limits</title>
+    <link rel="canonical" href="https://java-sandbox.sajitkhadka.com/docs">
 
     <!-- SEO Meta Tags -->
-    <meta name="description" content="Learn how to use our online Java compiler API. Easily compile and run Java code with optional arguments via our simple RESTful API.">
-    <meta name="keywords" content="Java API, compile Java code API, execute Java online, online compiler API, Java code runner">
+    <meta name="description" content="Free online Java compiler REST API. Compile and run Java code with one POST request - curl, JavaScript and Python examples, response format and rate limits (30 requests per 30 seconds).">
+    <meta name="keywords" content="Java compiler API, free code execution API, run Java code API, online compiler REST API, Java code runner, rate limit">
     <meta name="author" content="Sajit Khadka">
     <meta name="robots" content="index, follow">
+    <meta property="og:title" content="Free Java Compiler API - Documentation &amp; Rate Limits">
+    <meta property="og:description" content="Compile and run Java code with a single POST request. Free, no API key.">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://java-sandbox.sajitkhadka.com/docs">
+    <meta property="og:image" content="https://java-sandbox.sajitkhadka.com/images/java-compiler-banner.png">
+    <meta name="twitter:card" content="summary_large_image">
 
     <style>
         body {
@@ -58,7 +65,7 @@
     </style>
 </head>
 <body>
-<h1 style="font-size: 25px; ">API Documentation</h1>
+<h1 style="font-size: 25px; ">Free Java Compiler API Documentation</h1>
 <div class="content">
     <h2>How to Use the API</h2>
     <p>The API allows you to compile and execute Java code with optional arguments. Below is an example of how to interact with it.</p>
@@ -87,16 +94,39 @@
     <h3>Example</h3>
     <p>Use the following request with curl:</p>
     <pre>
-curl -X POST https://java-sandbox.sajit.me/api/compile \
+curl -X POST https://java-sandbox.sajitkhadka.com/api/compile \
 -H "Content-Type: application/json" \
 -d '{
     "code": "public class Main { public static void main(String[] args) { System.out.println(\"Hello, World!\"); } }",
     "input": ""
 }'
     </pre>
+
+    <h3>Authentication</h3>
+    <p>None. The API is free and needs no API key.</p>
+
+    <h3>Rate Limits</h3>
+    <p>Each client IP may send <strong>30 requests per 30 seconds</strong>. Beyond that the API replies
+       with <code>HTTP 429 Too Many Requests</code> and <code>{"error": "Too many requests. Please try again later."}</code>.
+       Wait a few seconds and retry. Responses include <code>X-RateLimit-Remaining</code> and, on 429, <code>Retry-After</code>. Other limits: 5 second execution timeout, 64 KB of code, 64 KB of returned output, at most 100 whitespace-separated input values, and 4 programs running at once server-wide (HTTP 503 when busy). Missing code or no class gives HTTP 400; oversized code gives 413.</p>
+
+    <h3>Examples</h3>
+    <h4>JavaScript</h4>
+    <pre>const res = await fetch("https://java-sandbox.sajitkhadka.com/api/compile", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ code: "public class Main { public static void main(String[] a){ System.out.println(1+1); } }" })
+});
+console.log(await res.json());</pre>
+    <h4>Python</h4>
+    <pre>import requests
+r = requests.post("https://java-sandbox.sajitkhadka.com/api/compile",
+                  json={"code": "public class Main { public static void main(String[] a){ System.out.println(1+1); } }"})
+print(r.json())</pre>
 </div>
 <div class="nav-links">
-    <a href="https://github.com/sajitkhadka/java-compiler-sandbox">Github</a>
+    <a href="/">Online Java Compiler</a>
+    <a href="https://github.com/sajitkhadka/java-compiler-sandbox" rel="noopener">GitHub</a>
 </div>
 </body>
 </html>

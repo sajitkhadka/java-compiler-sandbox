@@ -1,31 +1,50 @@
 package me.sajit.javacompiler;
 
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import javax.tools.*;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class CompilerService {
-    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
+    static final int MAX_CODE_CHARS = 64 * 1024;
+    static final int MAX_OUTPUT_CHARS = 64 * 1024;
     private static final int MAX_INPUT_COUNT = 100;
+    private static final int MAX_CONCURRENT_RUNS = 4;
     private static final int TIMEOUT = 5; //sec
+    private static final int READER_JOIN_TIMEOUT = 2; //sec
+    // Only what the JVM needs to start; everything else in the server's environment is withheld from user code.
+    private static final Set<String> SAFE_ENV = Set.of("PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR");
 
-    private static String extractClassName(String sourceCode) {
-        Pattern pattern = Pattern.compile("\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
-        Matcher matcher = pattern.matcher(sourceCode);
+    // One cheap virtual thread per stdin writer / output reader; the semaphore bounds how many exist.
+    private static final ExecutorService EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
+    private final Semaphore runSlots = new Semaphore(MAX_CONCURRENT_RUNS);
+
+    private static final Pattern COMMENTS = Pattern.compile("//[^\\n]*|/\\*.*?\\*/", Pattern.DOTALL);
+    private static final Pattern PUBLIC_CLASS =
+            Pattern.compile("\\bpublic\\s+(?:(?:final|abstract|strictfp)\\s+)*class\\s+([A-Za-z_$][A-Za-z0-9_$]*)");
+    private static final Pattern ANY_CLASS = Pattern.compile("\\bclass\\s+([A-Za-z_$][A-Za-z0-9_$]*)");
+
+    /** The public class if there is one (javac requires the file to carry its name), else the first class. */
+    static String extractClassName(String sourceCode) {
+        String code = COMMENTS.matcher(sourceCode).replaceAll(" ");
+        Matcher matcher = PUBLIC_CLASS.matcher(code);
         if (matcher.find()) {
             return matcher.group(1);
         }
-        return null;
+        matcher = ANY_CLASS.matcher(code);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     private Map<String, Object> validateInputArguments(String javaCode, String inputStr) {
@@ -80,7 +99,6 @@ public class CompilerService {
             return 0;
         }
 
-        scannerMatcher.reset();
         int inputCount = 0;
         Matcher nextIntMatcher = nextIntPattern.matcher(javaCode);
         Matcher nextDoubleMatcher = nextDoublePattern.matcher(javaCode);
@@ -92,6 +110,7 @@ public class CompilerService {
 
         return inputCount;
     }
+
     private int findInputLineNumber(String javaCode) {
         String[] lines = javaCode.split("\n");
         for (int i = 0; i < lines.length; i++) {
@@ -105,92 +124,121 @@ public class CompilerService {
         return -1;
     }
 
-    private ResponseEntity<Map<String, Object>> formatMessage(String status, String message) {
+    private ResponseEntity<Map<String, Object>> formatMessage(HttpStatus httpStatus, String status, String message) {
         List<Map<String, Object>> errorDetails = new ArrayList<>();
         Map<String, Object> errorInfo = new HashMap<>();
         errorInfo.put("line", 0);
-        errorInfo.put("message", message);
+        errorInfo.put("message", message == null ? "Unexpected error" : message);
         errorDetails.add(errorInfo);
-        return ResponseEntity.ok(Map.of(
+        return ResponseEntity.status(httpStatus).body(Map.of(
                 "status", status,
                 "errors", errorDetails
         ));
     }
 
-    private ResponseEntity<Map<String, Object>> executeCodeWithInput(Path executionDir, String className, String input) {
+    private ResponseEntity<Map<String, Object>> formatMessage(String status, String message) {
+        return formatMessage(HttpStatus.OK, status, message);
+    }
+
+    /** Drains the stream completely but keeps only the first {@code MAX_OUTPUT_CHARS} chars, so a chatty program can neither block on a full pipe nor exhaust our heap. */
+    private static String readCapped(InputStream stream) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        boolean truncated = false;
+        try (Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
+            char[] buf = new char[4096];
+            int n;
+            while ((n = reader.read(buf)) != -1) {
+                int room = MAX_OUTPUT_CHARS - sb.length();
+                if (room > 0) {
+                    sb.append(buf, 0, Math.min(n, room));
+                }
+                if (n > room) {
+                    truncated = true;
+                }
+            }
+        }
+        if (truncated) {
+            sb.append("\n... output truncated at ").append(MAX_OUTPUT_CHARS).append(" characters");
+        }
+        return sb.toString();
+    }
+
+    private ResponseEntity<Map<String, Object>> executeCodeWithInput(Path executionDir, String className, String javaCode, String input) {
+        int expectedInputCount = countExpectedInputs(javaCode);
+        String[] inputs = input == null || input.isBlank() ? new String[0] : input.trim().split("\\s+");
+
+        if (inputs.length < expectedInputCount) {
+            return formatMessage("error", String.format(
+                    "Insufficient input: Expected %d input argument(s), but got %d.",
+                    expectedInputCount, inputs.length
+            ));
+        } else if (inputs.length > MAX_INPUT_COUNT) {
+            return formatMessage("error", String.format(
+                    "Too many input: Expected less than %d input argument(s), but got %d.", MAX_INPUT_COUNT, inputs.length));
+        }
+
+        Process process = null;
         try {
-            String javaCode = Files.readString(executionDir.resolve(className + ".java"));
-            int expectedInputCount = countExpectedInputs(javaCode);
+            ProcessBuilder processBuilder = new ProcessBuilder("java", "-Xmx128m", "-Xss512k", "-XX:+ExitOnOutOfMemoryError",
+                    "-cp", executionDir.toString(), className);
+            // The submitted program must not see the server's environment (tokens, credentials, config).
+            Map<String, String> env = processBuilder.environment();
+            env.keySet().removeIf(name -> !SAFE_ENV.contains(name.toUpperCase(Locale.ROOT)));
+            process = processBuilder.start();
+            final Process proc = process;
 
-            String[] inputs = input == null ? new String[0] : input.trim().split("\\s+");
-
-            if (inputs.length < expectedInputCount) {
-                return formatMessage("error", String.format(
-                        "Insufficient input: Expected %d input argument(s), but got %d.",
-                        expectedInputCount, inputs.length
-                ));
-            }
-            else if(inputs.length > MAX_INPUT_COUNT){
-                return formatMessage("error", String.format(
-                        "Too many input: Expected less than %d input argument(s), but got %d.", MAX_INPUT_COUNT, inputs.length));
-            }
-
-            ProcessBuilder processBuilder = new ProcessBuilder("java", "-cp", executionDir.toString(), className);
-            Process process = processBuilder.start();
-
-            CompletableFuture<Void> inputFuture = CompletableFuture.runAsync(() -> {
-                try (PrintWriter processInput = new PrintWriter(process.getOutputStream(), true)) {
+            // Start the readers first: if they only start after the process exits, anything beyond the pipe buffer deadlocks it.
+            Future<String> outputFuture = EXECUTOR.submit(() -> readCapped(proc.getInputStream()));
+            Future<String> errorFuture = EXECUTOR.submit(() -> readCapped(proc.getErrorStream()));
+            EXECUTOR.submit(() -> {
+                try (PrintWriter processInput = new PrintWriter(proc.getOutputStream(), true)) {
                     for (String arg : inputs) {
                         processInput.println(arg);
-                        processInput.flush();
                     }
-                    processInput.close();
-                } catch (Exception e) {
-                    System.out.println(e.getMessage());
                 }
-            }, EXECUTOR);
+            });
 
-            boolean processExited = process.waitFor(TIMEOUT, TimeUnit.SECONDS);
-
-            if (!processExited) {
-                process.destroyForcibly();
+            if (!process.waitFor(TIMEOUT, TimeUnit.SECONDS)) {
                 return formatMessage("error", "Execution timed out");
             }
 
-            Future<String> outputFuture = EXECUTOR.submit(() -> {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                    return reader.lines().collect(Collectors.joining("\n"));
-                }
-            });
-
-            Future<String> errorFuture = EXECUTOR.submit(() -> {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-                    return reader.lines().collect(Collectors.joining("\n"));
-                }
-            });
-
-            inputFuture.get(TIMEOUT, TimeUnit.SECONDS);
-            String output = outputFuture.get(TIMEOUT, TimeUnit.SECONDS);
-            String error = errorFuture.get(TIMEOUT, TimeUnit.SECONDS);
-
-            deleteDirectory(executionDir);
+            String output = outputFuture.get(READER_JOIN_TIMEOUT, TimeUnit.SECONDS);
+            String error = errorFuture.get(READER_JOIN_TIMEOUT, TimeUnit.SECONDS);
             String combinedOutput = (output + error).trim();
-            int exitCode = process.exitValue();
-            String status = exitCode == 0 ? "success" : "error";
-            if (status.equals("error")) {
-                return formatMessage(status, combinedOutput.isEmpty() ? "Execution failed" : combinedOutput);
-            } else {
-                return ResponseEntity.ok(Map.of(
-                        "status", status,
-                        "message", combinedOutput.isEmpty() ? "No output" : combinedOutput
-                ));
-            }
 
+            if (process.exitValue() != 0) {
+                return formatMessage("error", combinedOutput.isEmpty() ? "Execution failed" : combinedOutput);
+            }
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", combinedOutput.isEmpty() ? "No output" : combinedOutput
+            ));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return formatMessage("error", "Execution interrupted");
         } catch (Exception e) {
             return formatMessage("error", e.getMessage());
+        } finally {
+            if (process != null) {
+                process.descendants().forEach(ProcessHandle::destroyForcibly);
+                process.destroyForcibly();
+            }
         }
     }
+
     public ResponseEntity<Map<String, Object>> compile(String javaCode, String inputStr) {
+        if (javaCode == null || javaCode.isBlank()) {
+            return formatMessage(HttpStatus.BAD_REQUEST, "error", "The 'code' field is required.");
+        }
+        if (javaCode.length() > MAX_CODE_CHARS) {
+            return formatMessage(HttpStatus.PAYLOAD_TOO_LARGE, "error",
+                    "Code is too large: the limit is " + MAX_CODE_CHARS + " characters.");
+        }
+        String className = extractClassName(javaCode);
+        if (className == null) {
+            return formatMessage(HttpStatus.BAD_REQUEST, "error", "No class declaration found in the code.");
+        }
+
         Map<String, Object> validationResult = validateInputArguments(javaCode, inputStr);
         if (!(boolean) validationResult.get("isValid")) {
             return ResponseEntity.ok(Map.of(
@@ -199,57 +247,65 @@ public class CompilerService {
             ));
         }
 
-        String className = extractClassName(javaCode);
-        try {
-            // Create a completely unique directory for each request
-            Path requestTempDir = Files.createTempDirectory("java-compiler-request-");
-            requestTempDir.toFile().deleteOnExit();
+        if (!runSlots.tryAcquire()) {
+            ResponseEntity<Map<String, Object>> busy = formatMessage(HttpStatus.SERVICE_UNAVAILABLE, "error",
+                    "The server is busy running other programs. Please retry in a few seconds.");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header(HttpHeaders.RETRY_AFTER, "5")
+                    .body(busy.getBody());
+        }
 
-            // Create source file in the unique directory
+        Path requestTempDir = null;
+        try {
+            requestTempDir = Files.createTempDirectory("java-compiler-request-");
             Path sourceFile = requestTempDir.resolve(className + ".java");
             Files.writeString(sourceFile, javaCode);
 
             JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+            if (compiler == null) {
+                return formatMessage("error", "No Java compiler available: run the server on a JDK, not a JRE.");
+            }
             DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-            StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null);
-
-            List<String> compilationOptions = Arrays.asList("-d", requestTempDir.toString());
-            Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromFiles(Arrays.asList(sourceFile.toFile()));
-            JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, diagnostics, compilationOptions, null, compilationUnits);
-
-            boolean compilationSuccess = task.call();
+            boolean compilationSuccess;
+            try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null)) {
+                Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjects(sourceFile.toFile());
+                compilationSuccess = compiler.getTask(null, fileManager, diagnostics,
+                        List.of("-d", requestTempDir.toString()), null, compilationUnits).call();
+            }
 
             if (!compilationSuccess) {
-                 List<Map<String, Object>> errorDetails = new ArrayList<>();
+                List<Map<String, Object>> errorDetails = new ArrayList<>();
                 for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
                     Map<String, Object> errorInfo = new HashMap<>();
-
                     long lineNumber = diagnostic.getLineNumber();
                     if (lineNumber > 0) {
                         errorInfo.put("line", (int) lineNumber);
                     }
-
                     errorInfo.put("message", diagnostic.getMessage(null));
                     errorDetails.add(errorInfo);
                 }
-                deleteDirectory(requestTempDir);
                 return ResponseEntity.ok(Map.of(
                         "status", "error",
                         "errors", errorDetails
                 ));
             }
-            return executeCodeWithInput(requestTempDir, className, inputStr);
+            return executeCodeWithInput(requestTempDir, className, javaCode, inputStr);
         } catch (Exception e) {
             return formatMessage("error", e.getMessage());
+        } finally {
+            runSlots.release();
+            deleteDirectory(requestTempDir);
         }
     }
 
-    private void deleteDirectory(Path dir) throws IOException {
-        Files.walk(dir)
-                .sorted(Comparator.reverseOrder())
-                .map(Path::toFile)
-                .forEach(File::delete);
+    private void deleteDirectory(Path dir) {
+        if (dir == null) {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+        } catch (IOException ignored) {
+            // Best effort: the OS temp cleaner gets whatever is left.
+        }
     }
-
-
 }

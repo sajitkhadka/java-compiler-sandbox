@@ -4,26 +4,45 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
-    <title>Online Java Code Compiler Sandbox - Run Java Code Instantly</title>
+    <title>Online Java Compiler - Run Java Code in Your Browser | Free Java Sandbox &amp; API</title>
+    <link rel="canonical" href="https://java-sandbox.sajitkhadka.com/">
 
     <!-- SEO Meta Tags -->
-    <meta name="description" content="Run your Java code instantly in this online Java compiler sandbox. Supports custom arguments and provides detailed output with code highlighting.">
-    <meta name="keywords" content="Java compiler, online Java compiler, run Java code online, Java sandbox, compile Java code, execute Java code">
+    <meta name="description" content="Free online Java compiler. Write, compile and run Java 21 code in your browser with stdin input and line-accurate compiler errors. Also available as a free REST API.">
+    <meta name="keywords" content="online Java compiler, run Java online, Java sandbox, Java compiler API, free Java code runner, compile Java code, Java 21">
     <meta name="author" content="Sajit Khadka">
-    <meta name="robots" content="index, follow">
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <meta name="theme-color" content="#44bbbb">
 
     <!-- Open Graph Meta Tags -->
-    <meta property="og:title" content="Online Java Code Compiler Sandbox - Run Java Code Instantly">
-    <meta property="og:description" content="Run your Java code instantly in this online Java compiler sandbox. Supports custom arguments and provides detailed output with code highlighting.">
+    <meta property="og:title" content="Online Java Compiler - Run Java Code in Your Browser">
+    <meta property="og:description" content="Free online Java compiler. Write, compile and run Java 21 code in your browser with stdin input and line-accurate compiler errors. Also available as a free REST API.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://java-sandbox.sajit.me">
-    <meta property="og:image" content="https://java-sandbox.sajit.me/images/java-compiler-banner.png">
+    <meta property="og:url" content="https://java-sandbox.sajitkhadka.com/">
+    <meta property="og:site_name" content="Java Compiler Sandbox">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:image" content="https://java-sandbox.sajitkhadka.com/images/java-compiler-banner.png">
 
     <!-- Twitter Card Meta Tags -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Online Java Code Compiler Sandbox - Run Java Code Instantly">
-    <meta name="twitter:description" content="Run your Java code instantly in this online Java compiler sandbox. Supports custom arguments and provides detailed output with code highlighting.">
-    <meta name="twitter:image" content="https://java-sandbox.sajit.me/images/java-compiler-banner.png">
+    <meta name="twitter:title" content="Online Java Compiler - Run Java Code in Your Browser">
+    <meta name="twitter:description" content="Free online Java compiler. Write, compile and run Java 21 code in your browser with stdin input and line-accurate compiler errors. Also available as a free REST API.">
+    <meta name="twitter:image" content="https://java-sandbox.sajitkhadka.com/images/java-compiler-banner.png">
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Java Compiler Sandbox",
+      "url": "https://java-sandbox.sajitkhadka.com/",
+      "description": "Free online Java compiler and REST API. Compile and run Java 21 code in the browser.",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Any",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@type": "Person", "name": "Sajit Khadka", "url": "https://sajitkhadka.com" },
+      "sameAs": ["https://github.com/sajitkhadka/java-compiler-sandbox"]
+    }
+    </script>
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
@@ -97,7 +116,8 @@
 </head>
 
 <body>
-<h1 style="font-size: 25px; ">Java Code Executor</h1>
+<h1 style="font-size: 25px; ">Online Java Compiler</h1>
+<p style="text-align:center">Write, compile and run Java code instantly - free, no sign-up. Need it in your own app? Use the <a href="/docs">free Java compiler API</a>.</p>
 <div class="form-container">
     <form id="codeForm">
         <label for="javaCode" >Java Code:</label>
@@ -113,8 +133,8 @@
 </div>
 
 <div class="nav-links">
-    <a href="/documentation.html">API Documentation</a>
-    <a href="https://github.com/sajitkhadka/java-compiler-sandbox">Github</a>
+    <a href="/docs">API Documentation</a>
+    <a href="https://github.com/sajitkhadka/java-compiler-sandbox" rel="noopener">GitHub</a>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>

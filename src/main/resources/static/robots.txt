@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://java-sandbox.sajitkhadka.com/sitemap.xml

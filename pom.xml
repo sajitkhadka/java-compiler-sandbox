@@ -10,21 +10,26 @@
 	</parent>
 	<groupId>me.sajit</groupId>
 	<artifactId>online-java-compiler</artifactId>
-	<version>1.0.1</version>
-	<name>Java Compiler Sandox API</name>
-	<description>Exam Hub is backend for processing exam related functionalities</description>
-	<url/>
+	<version>1.1.0</version>
+	<name>Java Compiler Sandbox API</name>
+	<description>Free online Java compiler and REST API built with Spring Boot</description>
+	<url>https://java-sandbox.sajitkhadka.com</url>
 	<licenses>
-		<license/>
+		<license>
+			<name>MIT License</name>
+			<url>https://github.com/sajitkhadka/java-compiler-sandbox/blob/main/LICENSE</url>
+		</license>
 	</licenses>
 	<developers>
-		<developer/>
+		<developer>
+			<name>Sajit Khadka</name>
+			<url>https://sajitkhadka.com</url>
+		</developer>
 	</developers>
 	<scm>
-		<connection/>
-		<developerConnection/>
-		<tag/>
-		<url/>
+		<connection>scm:git:https://github.com/sajitkhadka/java-compiler-sandbox.git</connection>
+		<developerConnection>scm:git:git@github.com:sajitkhadka/java-compiler-sandbox.git</developerConnection>
+		<url>https://github.com/sajitkhadka/java-compiler-sandbox</url>
 	</scm>
 	<properties>
 		<java.version>21</java.version>
@@ -73,7 +78,7 @@
 				<version>3.4.2</version>
 				<configuration>
 					<from>
-						<image>openjdk:21-jdk-slim</image>
+						<image>eclipse-temurin:21-jdk</image>
 					</from>
 					<to>
 						<image>${project.artifactId}</image>
@@ -83,11 +88,13 @@
 						</tags>
 					</to>
 					<container>
+						<user>1000</user>
 						<ports>
 							<port>8080</port>
 						</ports>
 						<jvmFlags>
 							<jvmFlag>-Dspring.profiles.active=prod</jvmFlag>
+							<jvmFlag>-Xmx384m</jvmFlag>
 						</jvmFlags>
 					</container>
 				</configuration>
