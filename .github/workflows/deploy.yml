@@ -1,0 +1,124 @@
+name: Deploy
+
+# Tag-driven release. Pushing vX.Y.Z does all of this:
+#   1. builds the image and pushes it to the registry,
+#   2. commits the new image tag into the k8s-config repo,
+#   3. Argo CD (automated sync) notices the commit and rolls it out,
+#   4. a GitHub Release is created with notes generated from the merged changes.
+#
+# This workflow never talks to the cluster. Argo CD owns what is running; this file only changes the
+# desired state in git. Same shape as sync-todo, tickoff and every other deployable repo.
+#
+# Needs a self-hosted runner registered to THIS repo (the LAN registry is private; runners are
+# per-repo) and these repo secrets: REGISTRY_USER, REGISTRY_PASSWORD, K8S_CONFIG_DEPLOY_KEY (a write
+# deploy key scoped to k8s-config alone, one per repo).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  REGISTRY: 192.168.0.120:5000
+  IMAGE: online-java-compiler
+  MANIFEST: java-sandbox/java-sandbox-deployment.yaml
+
+# Two tags pushed close together would otherwise race on the push to k8s-config.
+concurrency:
+  group: deploy-manifests
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Build and push
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "$REGISTRY/$IMAGE:${{ github.ref_name }}" \
+            -t "$REGISTRY/$IMAGE:${{ github.sha }}" \
+            .
+          docker push "$REGISTRY/$IMAGE:${{ github.ref_name }}"
+          docker push "$REGISTRY/$IMAGE:${{ github.sha }}"
+
+  update-manifests:
+    needs: build-and-push
+    runs-on: self-hosted
+    steps:
+      # Write access to k8s-config comes from a deploy key scoped to that one repo, not a PAT.
+      - uses: actions/checkout@v4
+        with:
+          repository: sajitkhadka/k8s-config
+          ssh-key: ${{ secrets.K8S_CONFIG_DEPLOY_KEY }}
+          path: k8s-config
+          ref: main
+
+      - name: Point the manifest at the new image
+        working-directory: k8s-config
+        run: |
+          set -euo pipefail
+          [ -f "$MANIFEST" ] || { echo "missing $MANIFEST"; exit 1; }
+          sed -i -E "s|(image: .*/$IMAGE:).*|\1${{ github.sha }}|" "$MANIFEST"
+          # Fail loudly rather than committing a manifest the sed missed.
+          grep -q "$IMAGE:${{ github.sha }}" "$MANIFEST" \
+            || { echo "failed to set the image in $MANIFEST"; exit 1; }
+          git diff --stat
+
+      - name: Commit and push
+        working-directory: k8s-config
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "manifest already points at ${{ github.sha }}, nothing to commit"
+            exit 0
+          fi
+          git config user.name  "java-compiler-sandbox-ci"
+          git config user.email "java-compiler-sandbox-ci@users.noreply.github.com"
+          git commit -am "deploy(java-sandbox): ${{ github.ref_name }}
+
+          Image built from ${{ github.repository }}@${{ github.sha }} by ${{ github.workflow }}
+          run ${{ github.run_id }}."
+          for attempt in 1 2 3; do
+            if git push origin main; then exit 0; fi
+            echo "push rejected, rebasing (attempt $attempt)"
+            git pull --rebase origin main
+          done
+          echo "could not push the manifest update after 3 attempts"
+          exit 1
+
+      - name: Summary
+        run: |
+          {
+            echo "### Committed: ${{ github.ref_name }}"
+            echo ""
+            echo "Image tag \`${{ github.sha }}\` committed to k8s-config."
+            echo "Argo CD auto-syncs \`java-sandbox\`; it should be live within a few minutes."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Only after the manifests are committed, so a Release exists only for a tag that actually shipped.
+  release:
+    needs: update-manifests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Safe to re-run: a re-run of this workflow must not fail on an existing release.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists"; exit 0
+          fi
+          flags=(--generate-notes --verify-tag --title "$GITHUB_REF_NAME")
+          # v1.2.3-rc1 (any pre-release suffix) is a pre-release.
+          [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${flags[@]}"
